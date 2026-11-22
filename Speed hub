@@ -1,0 +1,321 @@
+-- Speed Hub (ONE script)
+-- Put this in ServerScriptService as a Script (leave RunContext on Legacy).
+-- It runs the server part itself, then sends a copy of itself to each admin
+-- which runs on their client and shows the menu.
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+-- Put your UserId (and any other admins) here
+local ADMINS = {
+	[123456789] = true, -- REPLACE with your UserId
+}
+local MAX_SPEED = 500
+
+----------------------------------------------------------------
+-- SERVER
+----------------------------------------------------------------
+if RunService:IsServer() then
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = "SpeedHubRemote"
+	remote.Parent = ReplicatedStorage
+
+	local data = {} -- [player] = { speed = number, auto = boolean }
+	local conns = {} -- [player] = RBXScriptConnection
+
+	local function isAdmin(player)
+		if ADMINS[player.UserId] then return true end
+		if game.CreatorType == Enum.CreatorType.User and player.UserId == game.CreatorId then
+			return true
+		end
+		return false
+	end
+
+	local function getHumanoid(player)
+		local char = player.Character
+		return char and char:FindFirstChildOfClass("Humanoid")
+	end
+
+	-- while Auto is on, anything that changes this admin's speed gets put back
+	local function hook(player)
+		if conns[player] then
+			conns[player]:Disconnect()
+			conns[player] = nil
+		end
+		local d = data[player]
+		local hum = getHumanoid(player)
+		if not (d and d.auto and hum) then return end
+		conns[player] = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+			if d.auto and hum.WalkSpeed ~= d.speed then
+				hum.WalkSpeed = d.speed
+			end
+		end)
+	end
+
+	local function onCharacter(player, char)
+		local hum = char:WaitForChild("Humanoid", 10)
+		if not hum then return end
+		local d = data[player]
+		if d and d.auto then
+			hum.WalkSpeed = d.speed
+		end
+		hook(player)
+	end
+
+	-- sends a copy of this script to the admin; it runs on their client as the menu
+	local function giveMenu(player)
+		local playerGui = player:WaitForChild("PlayerGui", 15)
+		if not playerGui then return end
+		if playerGui:FindFirstChild("SpeedHubMenu") then return end
+		local copy = script:Clone()
+		copy.Name = "SpeedHubMenu"
+		copy.RunContext = Enum.RunContext.Client
+		copy.Parent = playerGui
+	end
+
+	local function setupPlayer(player)
+		local admin = isAdmin(player)
+		player:SetAttribute("SpeedHubAdmin", admin)
+		if not admin then return end
+
+		data[player] = { speed = 16, auto = false }
+		player.CharacterAdded:Connect(function(char)
+			onCharacter(player, char)
+		end)
+		if player.Character then
+			task.spawn(onCharacter, player, player.Character)
+		end
+		task.spawn(giveMenu, player)
+	end
+
+	remote.OnServerEvent:Connect(function(player, speed, auto, apply)
+		if not isAdmin(player) then return end
+		local d = data[player]
+		if not d then return end
+		if typeof(speed) ~= "number" or speed ~= speed then return end
+		if typeof(auto) ~= "boolean" then return end
+
+		d.speed = math.clamp(speed, 0, MAX_SPEED)
+		d.auto = auto
+
+		if apply == true then
+			local hum = getHumanoid(player)
+			if hum then
+				hum.WalkSpeed = d.speed
+			end
+		end
+		hook(player)
+	end)
+
+	Players.PlayerAdded:Connect(setupPlayer)
+	for _, p in ipairs(Players:GetPlayers()) do
+		setupPlayer(p)
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		if conns[player] then
+			conns[player]:Disconnect()
+			conns[player] = nil
+		end
+		data[player] = nil
+	end)
+
+	return
+end
+
+----------------------------------------------------------------
+-- CLIENT (the menu, runs from the copy the server sends)
+----------------------------------------------------------------
+local player = Players.LocalPlayer
+
+local remote = ReplicatedStorage:WaitForChild("SpeedHubRemote", 15)
+if not remote then return end
+
+-- wait for the server to say if this player is an admin
+local waited = 0
+while player:GetAttribute("SpeedHubAdmin") == nil and waited < 15 do
+	waited += task.wait()
+end
+if player:GetAttribute("SpeedHubAdmin") ~= true then return end
+
+local targetSpeed = 16
+local autoOn = false
+
+local playerGui = player:WaitForChild("PlayerGui")
+local old = playerGui:FindFirstChild("SpeedHub")
+if old then old:Destroy() end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SpeedHub"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 220, 0, 144)
+main.Position = UDim2.new(0.5, -110, 0.4, 0)
+main.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 30)
+title.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+title.BorderSizePixel = 0
+title.Text = "  Speed Hub"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = main
+Instance.new("UICorner", title).CornerRadius = UDim.new(0, 10)
+
+local minBtn = Instance.new("TextButton")
+minBtn.Size = UDim2.new(0, 26, 0, 22)
+minBtn.Position = UDim2.new(1, -30, 0, 4)
+minBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+minBtn.BorderSizePixel = 0
+minBtn.Text = "-"
+minBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minBtn.Font = Enum.Font.GothamBold
+minBtn.TextSize = 16
+minBtn.Parent = title
+Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 6)
+
+local body = Instance.new("Frame")
+body.Size = UDim2.new(1, 0, 1, -30)
+body.Position = UDim2.new(0, 0, 0, 30)
+body.BackgroundTransparency = 1
+body.Parent = main
+
+local box = Instance.new("TextBox")
+box.Size = UDim2.new(1, -20, 0, 30)
+box.Position = UDim2.new(0, 10, 0, 8)
+box.BackgroundColor3 = Color3.fromRGB(40, 40, 52)
+box.BorderSizePixel = 0
+box.PlaceholderText = "Speed (ex: 50)"
+box.PlaceholderColor3 = Color3.fromRGB(140, 140, 150)
+box.Text = tostring(targetSpeed)
+box.TextColor3 = Color3.fromRGB(255, 255, 255)
+box.Font = Enum.Font.Gotham
+box.TextSize = 14
+box.ClearTextOnFocus = false
+box.Parent = body
+Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+
+local setBtn = Instance.new("TextButton")
+setBtn.Size = UDim2.new(0.5, -15, 0, 30)
+setBtn.Position = UDim2.new(0, 10, 0, 46)
+setBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 220)
+setBtn.BorderSizePixel = 0
+setBtn.Text = "Set"
+setBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+setBtn.Font = Enum.Font.GothamBold
+setBtn.TextSize = 14
+setBtn.Parent = body
+Instance.new("UICorner", setBtn).CornerRadius = UDim.new(0, 6)
+
+local autoBtn = Instance.new("TextButton")
+autoBtn.Size = UDim2.new(0.5, -15, 0, 30)
+autoBtn.Position = UDim2.new(0.5, 5, 0, 46)
+autoBtn.BackgroundColor3 = Color3.fromRGB(170, 55, 55)
+autoBtn.BorderSizePixel = 0
+autoBtn.Text = "Auto: OFF"
+autoBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+autoBtn.Font = Enum.Font.GothamBold
+autoBtn.TextSize = 14
+autoBtn.Parent = body
+Instance.new("UICorner", autoBtn).CornerRadius = UDim.new(0, 6)
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -20, 0, 20)
+status.Position = UDim2.new(0, 10, 0, 84)
+status.BackgroundTransparency = 1
+status.Text = "Speed: default"
+status.TextColor3 = Color3.fromRGB(180, 180, 195)
+status.Font = Enum.Font.Gotham
+status.TextSize = 13
+status.Parent = body
+
+-- Button logic (the server does the actual speed change)
+local function readSpeed()
+	local n = tonumber(box.Text)
+	if n then
+		targetSpeed = math.clamp(n, 0, MAX_SPEED)
+		box.Text = tostring(targetSpeed)
+		return true
+	end
+	status.Text = "Type a number first"
+	return false
+end
+
+setBtn.MouseButton1Click:Connect(function()
+	if readSpeed() then
+		remote:FireServer(targetSpeed, autoOn, true)
+		status.Text = "Speed set: " .. targetSpeed
+	end
+end)
+
+autoBtn.MouseButton1Click:Connect(function()
+	if not autoOn then
+		if not readSpeed() then return end
+		autoOn = true
+		remote:FireServer(targetSpeed, true, true)
+		autoBtn.Text = "Auto: ON"
+		autoBtn.BackgroundColor3 = Color3.fromRGB(50, 170, 80)
+		status.Text = "Auto locking: " .. targetSpeed
+	else
+		autoOn = false
+		remote:FireServer(targetSpeed, false, false)
+		autoBtn.Text = "Auto: OFF"
+		autoBtn.BackgroundColor3 = Color3.fromRGB(170, 55, 55)
+		status.Text = "Auto off"
+	end
+end)
+
+box.FocusLost:Connect(function()
+	if autoOn and readSpeed() then
+		remote:FireServer(targetSpeed, true, true)
+		status.Text = "Auto locking: " .. targetSpeed
+	end
+end)
+
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	body.Visible = not minimized
+	main.Size = minimized and UDim2.new(0, 220, 0, 30) or UDim2.new(0, 220, 0, 144)
+	minBtn.Text = minimized and "+" or "-"
+end)
+
+-- Dragging
+local dragging, dragStart, startPos
+title.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = main.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		local d = input.Position - dragStart
+		main.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + d.X,
+			startPos.Y.Scale, startPos.Y.Offset + d.Y
+		)
+	end
+end)
